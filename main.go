@@ -13,21 +13,21 @@ import (
 )
 
 var (
-	srcServerUUID string
-	dstServerUUID string
-	srcDir        string
-	dstDir        string
-	keepFiles     []string
+	srcSrvUUID string
+	dstSrvUUID string
+	srcSrvDir  string
+	dstSrvDir  string
+	keepFiles  []string
 )
 
 func init() {
-	srcServerUUID = os.Getenv("SRC_SERVER_UUID")
-	if srcServerUUID == "" {
+	srcSrvUUID = os.Getenv("SRC_SERVER_UUID")
+	if srcSrvUUID == "" {
 		log.Fatalf("No source server UUID found")
 	}
 
-	dstServerUUID = os.Getenv("DST_SERVER_UUID")
-	if dstServerUUID == "" {
+	dstSrvUUID = os.Getenv("DST_SERVER_UUID")
+	if dstSrvUUID == "" {
 		log.Fatalf("No destination server UUID found")
 	}
 
@@ -36,8 +36,8 @@ func init() {
 		baseDir = "/var/lib/pterodactyl/volumes/"
 	}
 
-	srcDir = filepath.Join(baseDir, srcServerUUID)
-	dstDir = filepath.Join(baseDir, dstServerUUID)
+	srcSrvDir = filepath.Join(baseDir, srcSrvUUID)
+	dstSrvDir = filepath.Join(baseDir, dstSrvUUID)
 
 	keepFiles = []string{}
 	for _, v := range strings.Split(os.Getenv("KEEP_FILES"), ",") {
@@ -103,7 +103,7 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 		command := i.ApplicationCommandData()
 		if command.Name == "copy" {
 			ch := make(chan bool)
-			go copyFiles(ch, true)
+			go copy(ch, true)
 
 			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
 				Type: discordgo.InteractionResponseChannelMessageWithSource,
@@ -116,12 +116,12 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 							Fields: []*discordgo.MessageEmbedField{
 								{
 									Name:   "Source Server",
-									Value:  fmt.Sprintf("`%s`", srcServerUUID),
+									Value:  fmt.Sprintf("`%s`", srcSrvUUID),
 									Inline: false,
 								},
 								{
 									Name:   "Destination Server",
-									Value:  fmt.Sprintf("`%s`", dstServerUUID),
+									Value:  fmt.Sprintf("`%s`", dstSrvUUID),
 									Inline: false,
 								},
 								{
@@ -151,15 +151,15 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 	}
 }
 
-func copyFiles(success chan bool, delete bool) {
-	if _, err := os.Stat(dstDir); os.IsNotExist(err) {
-		log.Printf("Destination directory %s does not exist", dstDir)
+func copy(success chan bool, delete bool) {
+	if _, err := os.Stat(dstSrvDir); os.IsNotExist(err) {
+		log.Printf("Destination directory %s does not exist", dstSrvDir)
 		success <- false
 		return
 	}
 
 	if delete {
-		err := removeFiles(dstDir)
+		err := removeFiles(dstSrvDir)
 		if err != nil {
 			log.Printf("Error removing destination files: %s", err)
 			success <- false
@@ -167,40 +167,13 @@ func copyFiles(success chan bool, delete bool) {
 		}
 	}
 
-	if _, err := os.Stat(srcDir); os.IsNotExist(err) {
-		log.Printf("Source directory %s does not exist", srcDir)
+	if _, err := os.Stat(srcSrvDir); os.IsNotExist(err) {
+		log.Printf("Source directory %s does not exist", srcSrvDir)
 		success <- false
 		return
 	}
 
-	err := filepath.Walk(srcDir, func(src string, info os.FileInfo, err error) error {
-		if err != nil {
-			return err
-		}
-
-		relSrc, err := filepath.Rel(srcDir, src)
-		if err != nil {
-			return err
-		}
-
-		dst := filepath.Join(dstDir, relSrc)
-
-		if !isKeepFile(dst) {
-			if info.IsDir() {
-				return os.MkdirAll(dst, info.Mode())
-			}
-
-			data, err := os.ReadFile(src)
-			if err != nil {
-				return err
-			}
-
-			return os.WriteFile(dst, data, info.Mode())
-		} else {
-			return nil
-		}
-	})
-
+	err := copyFiles(srcSrvDir, dstSrvDir)
 	if err != nil {
 		log.Printf("Error copying files: %s", err)
 		success <- false
@@ -234,6 +207,49 @@ func removeFiles(dirPath string) error {
 	return nil
 }
 
+func copyFiles(srcDirPath string, dstDirPath string) error {
+	srcFiles, err := os.ReadDir(srcDirPath)
+	if err != nil {
+		return err
+	}
+
+	for _, srcFile := range srcFiles {
+		srcFullpath := filepath.Join(srcDirPath, srcFile.Name())
+		dstFullpath := filepath.Join(dstDirPath, srcFile.Name())
+
+		if !isKeepFile(dstFullpath) {
+			srcFileInfo, err := srcFile.Info()
+			if err != nil {
+				return err
+			}
+
+			if srcFile.IsDir() {
+				err := os.MkdirAll(dstFullpath, srcFileInfo.Mode())
+				if err != nil {
+					return err
+				}
+
+				err = copyFiles(srcFullpath, dstFullpath)
+				if err != nil {
+					return err
+				}
+			} else {
+				data, err := os.ReadFile(srcFullpath)
+				if err != nil {
+					return err
+				}
+
+				err = os.WriteFile(dstFullpath, data, srcFileInfo.Mode())
+				if err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	return nil
+}
+
 func isKeepFile(file string) bool {
 	absFile, err := filepath.Abs(file)
 	if err != nil {
@@ -242,7 +258,7 @@ func isKeepFile(file string) bool {
 	}
 
 	for _, v := range keepFiles {
-		absV, err := filepath.Abs(filepath.Join(dstDir, v))
+		absV, err := filepath.Abs(filepath.Join(dstSrvDir, v))
 		if err != nil {
 			log.Printf("Error getting absolute path of %s: %s", v, err)
 			continue
