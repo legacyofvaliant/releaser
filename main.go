@@ -76,6 +76,9 @@ func main() {
 	}
 
 	log.Printf("Creating application commands")
+
+	cmds := []*discordgo.ApplicationCommand{}
+
 	cmd, err := dg.ApplicationCommandCreate(dg.State.User.ID, guilds[0].ID, &discordgo.ApplicationCommand{
 		Name:        "copy",
 		Description: "Copy server files from one server to another",
@@ -83,6 +86,16 @@ func main() {
 	if err != nil {
 		log.Fatalf("Error creating application commands: %s", err)
 	}
+	cmds = append(cmds, cmd)
+
+	cmd, err = dg.ApplicationCommandCreate(dg.State.User.ID, guilds[0].ID, &discordgo.ApplicationCommand{
+		Name:        "show-keep-files",
+		Description: "Show files that will not be overwritten or deleted",
+	})
+	if err != nil {
+		log.Fatalf("Error creating application commands: %s", err)
+	}
+	cmds = append(cmds, cmd)
 
 	log.Printf("Bot is now running")
 	sc := make(chan os.Signal, 1)
@@ -90,9 +103,11 @@ func main() {
 	<-sc
 
 	log.Printf("Removing application commands")
-	err = dg.ApplicationCommandDelete(dg.State.User.ID, guilds[0].ID, cmd.ID)
-	if err != nil {
-		log.Printf("Error deleting application commands: %s", err)
+	for _, cmd := range cmds {
+		err = dg.ApplicationCommandDelete(dg.State.User.ID, guilds[0].ID, cmd.ID)
+		if err != nil {
+			log.Printf("Error deleting application commands: %s", err)
+		}
 	}
 
 	log.Printf("Bot has been stopped")
@@ -147,6 +162,19 @@ func interactionCreate(s *discordgo.Session, i *discordgo.InteractionCreate) {
 					Description: ":x: Copying has failed!",
 				})
 			}
+		} else if command.Name == "show-keep-files" {
+			s.InteractionRespond(i.Interaction, &discordgo.InteractionResponse{
+				Type: discordgo.InteractionResponseChannelMessageWithSource,
+				Data: &discordgo.InteractionResponseData{
+					Embeds: []*discordgo.MessageEmbed{
+						{
+							Color:       0x87ceeb,
+							Title:       "Keep Files",
+							Description: fmt.Sprintf("These files will not be overwritten or deleted:\n```%s```", strings.Join(keepFiles, "\n")),
+						},
+					},
+				},
+			})
 		}
 	}
 }
